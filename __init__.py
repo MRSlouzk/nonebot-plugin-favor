@@ -1,3 +1,4 @@
+from email import message
 import json
 import random
 import re
@@ -5,28 +6,35 @@ from typing import List,Literal
 
 from nonebot import on_command,require,Bot,on_keyword,on_message
 from nonebot.permission import SUPERUSER
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, MessageEvent,Message
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, MessageEvent,Message,Bot
 from nonebot.log import logger
 from nonebot.params import CommandArg
 # sys.path.append("..")
 # from favor import data_handle
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.executors.pool import ThreadPoolExecutor
+
 from .data_handle import * #导入数据处理包
 
-strange_text=["我们之前是不是没见过呀?","凛绪不认识你呀!","爸爸妈妈说要远离陌生人!"]
-familiar_text=["你好啊","凛绪之前好像见过你!","(微笑)","(挥手)"]
+strange_text=["我们之前是不是没见过呀?","凛绪不认识你呀!","爸爸妈妈说要远离陌生人!","别靠近凛绪!","你是谁呀?","凛绪不和陌生人打招呼!"]
+familiar_text=["你好啊","凛绪之前好像见过你!","(微笑)"]
+known_text=["你是凛绪的好朋友!","有什么困难凛绪会帮你的!"]
 friends_text=["(贴上来)","凛绪好开心能和你一起!","很高兴认识你!"]
 family_text=["凛绪要抱抱!","[CQ:at,qq={event.user_id}]是凛绪最重要的家人!","凛绪喜欢你!","凛绪也爱你!"]
 
 def text(value): #输出语句
     if(value<20):
-        return strange_text[random.randint(0,2)]
+        return random.choice(strange_text)
     elif(value<100):
-        return familiar_text[random.randint(0,3)]
+        return random.choice(family_text)
+    elif (value < 500):
+        return random.choice(known_text)
     elif(value<800):
-        return friends_text[random.randint(0,2)]
+        return random.choice(friends_text)
     elif(value<=1000):
-        return family_text[random.randint(0,3)]
+        return random.choice(family_text)
 
 ##基础功能实现##
 
@@ -37,21 +45,27 @@ query=on_command("好感度",priority=50,block=True)
 reset=on_command("计数清零",priority=50,block=False,permission=SUPERUSER)
 set=on_command("设置好感度",priority=50,block=False,permission=SUPERUSER)
 help=on_command("好感度帮助",priority=50,block=True)
+register=on_command("注册好感度",priority=49,block=False)
+rank=on_command("好感度排名",priority=50,block=False)
 
 @query.handle()
 async def _(event: GroupMessageEvent):
     uid=str(event.user_id)
     gid=str(event.group_id)
     value=readData(uid,gid)
-    if(event.user_id==341163964):
-        await query.finish(Message(f"[CQ:at,qq=341163964]凛绪最爱妈妈了!!!"))
-    await query.finish(Message(f"[CQ:at,qq={event.user_id}]凛绪对你的好感度为{value}呀!{text(int(value))}"))
+    if(value!=-1):
+        if(event.user_id==341163964):
+            await query.finish(Message(f"[CQ:at,qq=341163964]凛绪最爱妈妈了!!!"))
+        await query.finish(Message(f"[CQ:at,qq={event.user_id}]凛绪对你的好感度为{value}呀!{text(int(value))}"))
+    else:
+        await query.finish(Message("还没有注册好感度啊!输入/注册好感度 后才可以使用好感度系统!"))
 
 @reset.handle()
 async def _(event: PrivateMessageEvent):
     if(event.user_id==3237231778):
         init_today()
         await reset.finish("清零完成!")
+    logger.warning("有人要篡改数据!")
     await reset.finish("没有权限啊!")
 
 @set.handle()
@@ -59,22 +73,89 @@ async def _(event: PrivateMessageEvent,args: Message = CommandArg()):
     arg = args.extract_plain_text().split()
     if(len(arg)==2):
         if(event.user_id==3237231778):
-            changeData(arg[0],"684869122",int(arg[1]))
-            await reset.finish("设置完成!")
+            if(changeData(arg[0],"684869122",int(arg[1]))!=-1):
+                await reset.finish("设置完成!")
+            else:
+                await reset.finish("请先注册该用户!")
         await reset.finish("没有权限啊!")
     await reset.finish()
 
 @help.handle()
 async def _(event:GroupMessageEvent):
-    await help.finish(f"[CQ:at,qq={event.user_id}]")
+    await help.finish(Message(f"每天戳戳凛绪或者夸夸凛绪都可以增加好感度!但是要注意凛绪的心情!心情不好的时候有些行为可能会倒扣好感度的!"))
+
+@register.handle()
+async def _(event:GroupMessageEvent):
+    uid=str(event.user_id)
+    gid=str(event.group_id)
+    if readData(uid,gid)==-1:
+        initData(uid,gid)
+        await register.finish(Message(f"[CQ:at,qq={event.user_id}] /好感度 查看凛绪对你的好感度哦"))
+    else:
+        await register.finish(Message(f"[CQ:at,qq={event.user_id}]已经注册过了啊!"))
+
+@rank.handle()
+async def _(bot:Bot,event:GroupMessageEvent):
+    json=raw_json()
+    count=0
+    msg=Message()
+    sort_json = sorted(json.items(), key=lambda x: x[1]["684869122"]['Favor'], reverse=True)
+    for keys,values in sort_json:
+        if(count==8):
+            break
+        count+=1
+        info=await bot.get_group_member_info(group_id=event.group_id,user_id=int(keys),no_cache=False)
+        # logger.info(info)
+        # logger.info(info.get("card"))
+        card=info.get("card")
+        if(card==''):
+            card=info.get("nickname")
+        # logger.info(values)
+        dict_new=values
+        for i in dict_new.items():
+            favor=i[1]["Favor"]
+            # for j in i[1].items():
+            #     logger.info(j)
+            # favor=values["Favor"]
+            # logger.info(i)
+        # for values in values:
+        #     logger.info(values)
+        #     logger.info(favor)
+    #         favor = items[0]
+            msg+=Message(f"{count}.{card}(qq:{keys}):{favor}\n")
+    if(message!= ""):
+        await rank.finish(msg)
+    else:
+        await rank.finish("数据错误！")
+
+##凛绪每日心情
+
+def _checker1(event: GroupMessageEvent) ->bool :
+    return (event.message_type=="group")
+
+mood_d=on_keyword({"凛绪今天心情怎么样"},rule=_checker1,priority=98)
+
+def mood_text(mood: int):
+    if(mood<=20):
+        return "凛绪今天不开心!不要惹凛绪生气!"
+    elif(mood<=40):
+        return "凛绪今天心情不太好......"
+    elif(mood<=60):
+        return "凛绪今天棒棒哒~"
+    elif(mood<=80):
+        return "凛绪想要一起玩!"
+    elif(mood<=100):
+        return "凛绪今天好开心呀!!!"
+
+@mood_d.handle()
+async def _(event:GroupMessageEvent):
+    mood=mood_daliy()
+    await mood_d.finish(Message("今天心情值为:"+str(mood)+mood_text(mood)))
 
 ##提升好感度 法一##
 #此方法不用 @凛绪
 
-word_set={"凛绪可爱","喜欢凛绪","摸摸凛绪"}
-
-def _checker1(event: GroupMessageEvent) ->bool :
-    return (event.message_type=="group")
+word_set={"凛绪可爱","喜欢凛绪","摸摸凛绪","抱抱凛绪","凛绪乖"}
 
 fav_up=on_keyword(word_set,rule=_checker1,priority=98)
 
@@ -83,32 +164,31 @@ async def _(bot: Bot, event: GroupMessageEvent):
     uid=str(event.user_id)
     gid=str(event.group_id)
     rnd_favor=random.randint(0,2)
-    try:
-        now_value=readTargetData(uid,gid,"DialogAdd")
-    except KeyError:
-        now_value=readTargetData(uid,gid,"DialogAdd")
-    finally:
-        now_value = readTargetData(uid, gid, "DialogAdd")
-    if now_value<=5:
-        addData(uid,gid,rnd_favor)
-        logger.info(f"凛绪对{uid}的好感度增加了{rnd_favor}!")
+    now_value = readTargetData(uid, gid, "DialogAdd")
+    if(now_value!=-1):
+        if now_value<=5:
+            addData(uid,gid,rnd_favor)
+            logger.info(f"凛绪对{uid}的好感度增加了{rnd_favor}!")
+        else:
+            logger.warning(f"{uid}的今日通过会话提升的好感度到上限了!")
+        await fav_up.finish()
     else:
-        logger.warning(f"{uid}的今日通过会话提升的好感度到上限了!")
-    await fav_up.finish()
+        await fav_up.finish(Message("好感度没注册呢!"))
 
 ##提升好感度 法二##
 #此方法需要 @凛绪
 
-trigger_text_1=["摸","抱","亲","喂"]
+trigger_text_1=["摸","抱","亲","喂","可爱","喜欢你"]
 trigger_text_2=["滚","爬","走啊"]
 
 def favor_dialog_rule(event: GroupMessageEvent) -> bool: #触发器规则函数
     tem_jud=False
     all_list=trigger_text_1+trigger_text_2
+    is_tme="[CQ:at,qq=3223808209]" in event.raw_message
     for items in range(0,len(all_list)):
         if(all_list[items] in event.raw_message):
             tem_jud=True
-    return (tem_jud and event.is_tome)
+    return (tem_jud and is_tme)
 
 def ergodic_list(list_name: List[str],msg: str) -> bool: #遍历名为list_name的字符串列表判断msg是否在里面
     result=False
@@ -128,18 +208,21 @@ async def _(event: GroupMessageEvent,bot: Bot):
     uid=str(event.user_id)
     gid=str(event.group_id)
     message=re.sub(u"\\[.*?]", "", event.raw_message) #提取原始消息并去除CQ消息段
-    # logger.info(f"{event.raw_message}")
-    if(ergodic_list(trigger_text_1,message) and int(readTargetData(uid,gid,"DialogAdd"))<=1):
-        rnd=random.randint(1,3)
-        Message("凛绪好开心!")
-        addData(uid,gid,rnd)
-        addTargetData(uid,gid,"DialogAdd",1)
-    elif(ergodic_list(trigger_text_2,message) and int(readTargetData(uid,gid,"DialogAdd"))<=1):
-        rnd=random.randint(-3,-1)
-        Message("凛绪好难过......")
-        addData(uid,gid,rnd)
-        addTargetData(uid,gid,"DialogAdd",1)
-    await favor_trigger.finish()
+    value=readTargetData(uid,gid,"DialogAdd")
+    if(value!=-1):
+        # logger.info(f"{event.raw_message}")
+        if(ergodic_list(trigger_text_1,message) and int(value)<=1):
+            rnd=random.randint(1,3)
+            await favor_trigger.send(Message("凛绪好开心!"))
+            addData(uid,gid,rnd)
+            addTargetData(uid,gid,"DialogAdd",1)
+        elif(ergodic_list(trigger_text_2,message) and int(value)<=1):
+            rnd=random.randint(-3,-1)
+            await favor_trigger.send(Message("凛绪好难过......"))
+            addData(uid,gid,rnd)
+            addTargetData(uid,gid,"DialogAdd",1)
+    else:
+        await favor_trigger.finish(Message("请先注册好感度!"))
 # (未实现)每日零点清零好感度增加计数限制
 """
 thread=Thread(target=init_today)
@@ -159,3 +242,12 @@ while(True):
         # 调用相关方法：执行计算、发邮件动作。
         sleep(1)
 """
+
+executor = {
+    'default': ThreadPoolExecutor(1)  # 只能有1个线程存在
+}
+
+backgroundScheduler = BackgroundScheduler(executors=executor)
+cornTrigger = CronTrigger(hour=0, minute=0, second=0)
+backgroundScheduler.add_job(init_today, cornTrigger, id='reset_favor_data_daily')
+backgroundScheduler.start()
