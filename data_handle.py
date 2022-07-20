@@ -6,6 +6,7 @@ import operator
 from datetime import date
 
 from nonebot.log import logger
+# from .items_handle import initData_i
 
 class Vividict(dict): #多层嵌套字典
     def __missing__(self, key):
@@ -38,8 +39,9 @@ def addNewType(uid: str,gid: str,type: str): #添加新数据类型
         json.dump(content, f_new, indent=4)
 
 def initData(uid: str,gid: str): #初始化好感度
+    initData_i(uid)
     data=Vividict()
-    data[uid][gid]={"Favor":0,"Today":0,"DialogAdd":0,"Mood":0}
+    data[uid][gid]={"Favor":0,"Today":0,"DialogAdd":0,"Mood":0,"Extract":0}
     # addNewType(uid,gid,"Favor") #好感度
     # addNewType(uid, gid, "Today") #今日好感度增加量
     # addNewType(uid, gid, "DialogAdd") #对话好感度增加量
@@ -56,6 +58,7 @@ def init_today(): #初始化每日数值
     for keys,values in content.items():
         values["684869122"]["Today"] = 0
         values["684869122"]["DialogAdd"] = 0
+        values["684869122"]["Extract"]+=1
     with open(data_dir + "/favor.json", 'w') as f_new:
         json.dump(content, f_new, indent=4)
 
@@ -94,7 +97,7 @@ def readMaxData(uid: str,gid: str) -> int : #读取今日变化好感度
     try:
         return int(content[uid][gid]["Today"])
     except KeyError:
-        return -1
+        return -114514
 
 def readTargetData(uid: str,gid: str,type: str) -> int: #读取指定类型数据
     with open(data_dir + "/favor.json", "r") as f:
@@ -106,7 +109,7 @@ def readTargetData(uid: str,gid: str,type: str) -> int: #读取指定类型数�
 
 def addData(uid: str,gid: str,favor: int): #增加好感度
     value=readMaxData(uid,gid)
-    if(value!=-1):
+    if(value!=-114514):
         value+=favor
         if (value <= 15):
             if(readData(uid,gid)+favor>0 and readData(uid,gid)+favor<1000):
@@ -158,11 +161,14 @@ def mood_daliy(): #每日心情基值
     rnd = random.Random()
     seed = int(date.today().strftime("%y%m%d"))
     rnd.seed(seed)
-    mood=rnd.randint(0,100)
+    mood=int(rnd.gauss(60,50))
+    while(mood<0 or mood>100):
+        mood = int(rnd.gauss(60, 50))
+    # mood=rnd.randint(0,100)
     return mood
-    # value=rnd.
 
 if __name__=="__main__":
+    # pass
 #     addNewType("3237231778","684869122","DialogMax")
 #     print(readTargetData("3237231778","684869122","DialogMax"))
 #     initData("32372317780","684869122",0)
@@ -171,11 +177,14 @@ if __name__=="__main__":
 #     addData("32372317780","684869122",3)
 #     addData("3237","684869122",3)
 #     init_today()
-    json=raw_json()
-    sort_json=sorted(json.items(),key=lambda x:x[1]["684869122"]['Favor'],reverse=True)
-    for keys,values in sort_json:
-        print(keys)
+
+#     json=raw_json()
+#     sort_json=sorted(json.items(),key=lambda x:x[1]["684869122"]['Favor'],reverse=True)
+#     for keys,values in sort_json:
+#         print(keys)
+    a=readTargetData("3237231778", "684869122", "Extract")
+    print(a)
     # with open(data_dir + "/favor.json", "r") as f:
     #     content = json.load(f)
     # for items in content:
-    #     addNewType(items,"684869122","Mood")
+    #     addNewType(items,"684869122","Extract")
