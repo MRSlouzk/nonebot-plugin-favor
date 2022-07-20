@@ -4,19 +4,18 @@ import random
 import re
 from typing import List,Literal
 
-from nonebot import on_command,require,Bot,on_keyword,on_message
+from nonebot import on_command,on_keyword,on_message
 from nonebot.permission import SUPERUSER
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, MessageEvent,Message,Bot
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, MessageEvent,Message,Bot,MessageSegment
 from nonebot.log import logger
 from nonebot.params import CommandArg
-# sys.path.append("..")
-# from favor import data_handle
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.executors.pool import ThreadPoolExecutor
 
 from .data_handle import * #导入数据处理包
+from .items_handle import * #导入物品包
 
 strange_text=["我们之前是不是没见过呀?","凛绪不认识你呀!","爸爸妈妈说要远离陌生人!","别靠近凛绪!","你是谁呀?","凛绪不和陌生人打招呼!"]
 familiar_text=["你好啊","凛绪之前好像见过你!","(微笑)"]
@@ -47,6 +46,9 @@ set=on_command("设置好感度",priority=50,block=False,permission=SUPERUSER)
 help=on_command("好感度帮助",priority=50,block=True)
 register=on_command("注册好感度",priority=49,block=False)
 rank=on_command("好感度排名",priority=50,block=False)
+
+def _check(event:GroupMessageEvent):
+    return event.group_id==684869122
 
 @query.handle()
 async def _(event: GroupMessageEvent):
@@ -81,8 +83,17 @@ async def _(event: PrivateMessageEvent,args: Message = CommandArg()):
     await reset.finish()
 
 @help.handle()
-async def _(event:GroupMessageEvent):
-    await help.finish(Message(f"每天戳戳凛绪或者夸夸凛绪都可以增加好感度!但是要注意凛绪的心情!心情不好的时候有些行为可能会倒扣好感度的!"))
+async def _(args: Message = CommandArg()):
+    arg = args.extract_plain_text().split()
+    if(len(arg)==0):
+        await help.finish(Message(f"每天戳戳凛绪或者夸夸凛绪都可以增加好感度!但是要注意凛绪的心情!心情不好的时候有些行为可能会倒扣好感度的!"))
+    elif(len(arg)==1):
+        if(arg[0]=="抽奖"):
+            await help.finish(Message("抽奖系统:输入/抽取道具 来进行抽取，每日都增加一次次数。1%获取优等级玩具熊或者蛋糕,2.5%获取良,4%获取劣"))
+        else:
+            await help.finish(Message("无效参数!"))
+    else:
+        await help.finish(Message("无效参数!"))
 
 @register.handle()
 async def _(event:GroupMessageEvent):
@@ -105,28 +116,59 @@ async def _(bot:Bot,event:GroupMessageEvent):
             break
         count+=1
         info=await bot.get_group_member_info(group_id=event.group_id,user_id=int(keys),no_cache=False)
-        # logger.info(info)
-        # logger.info(info.get("card"))
         card=info.get("card")
         if(card==''):
             card=info.get("nickname")
-        # logger.info(values)
         dict_new=values
         for i in dict_new.items():
             favor=i[1]["Favor"]
-            # for j in i[1].items():
-            #     logger.info(j)
-            # favor=values["Favor"]
-            # logger.info(i)
-        # for values in values:
-        #     logger.info(values)
-        #     logger.info(favor)
-    #         favor = items[0]
             msg+=Message(f"{count}.{card}(qq:{keys}):{favor}\n")
     if(message!= ""):
         await rank.finish(msg)
     else:
         await rank.finish("数据错误！")
+
+
+inventory=on_command("查看背包",priority=50,block=False)
+times_q=on_command("查询剩余次数",priority=50,block=False)
+extract=on_command("抽取道具",priority=50,block=False)
+
+@extract.handle()
+async def _(event: GroupMessageEvent):
+    uid=str(event.user_id)
+    gid=str(event.group_id)
+    if(readTargetData(uid,gid,"Extract")<=0):
+        await extract.finish(MessageSegment.at(event.user_id)+Message("抽奖次数用完了!"))
+    item_get=random_item()
+    if(item_get==-1):
+        addTargetData(uid, gid, "Extract", -1)
+        await extract.finish(MessageSegment.at(event.user_id)+Message("很遗憾没抽到东西呀!"))
+    else:
+        addTargetData(uid,gid,"Extract",-1)
+        add_item_num(uid,item_get,1)
+        for i in item_get.keys():
+            await extract.finish(MessageSegment.at(event.user_id)+Message("恭喜抽到奖品:"+i))
+
+@inventory.handle()
+async def _(event: GroupMessageEvent):
+    lst=get_item_list(str(event.user_id))
+    if(lst==-1):
+        await inventory.finish(MessageSegment.at(event.user_id)+Message("背包里没有物品!"))
+    else:
+        msg=Message()
+        for j in lst.keys():
+            for i in lst.values():
+                numb=i["number"]
+                msg+=Message(f"{j},数量:{numb}\n")
+                break
+        await inventory.finish(MessageSegment.at(event.user_id)+msg)
+
+@times_q.handle()
+async def _(event: GroupMessageEvent):
+    uid=str(event.user_id)
+    gid=str(event.group_id)
+    value=readTargetData(uid,gid,"Extract")
+    await times_q.finish(MessageSegment.at(event.user_id)+Message(f"次数剩余:{value}"))
 
 ##凛绪每日心情
 
@@ -148,9 +190,10 @@ def mood_text(mood: int):
         return "凛绪今天好开心呀!!!"
 
 @mood_d.handle()
-async def _(event:GroupMessageEvent):
+async def _():
     mood=mood_daliy()
-    await mood_d.finish(Message("今天心情值为:"+str(mood)+mood_text(mood)))
+    logger.info(f"今日心情值:{mood_daliy()}")
+    await mood_d.finish(Message(f"{mood_text(mood)}"))
 
 ##提升好感度 法一##
 #此方法不用 @凛绪
@@ -160,7 +203,7 @@ word_set={"凛绪可爱","喜欢凛绪","摸摸凛绪","抱抱凛绪","凛绪乖
 fav_up=on_keyword(word_set,rule=_checker1,priority=98)
 
 @fav_up.handle()
-async def _(bot: Bot, event: GroupMessageEvent):
+async def _(event: GroupMessageEvent):
     uid=str(event.user_id)
     gid=str(event.group_id)
     rnd_favor=random.randint(0,2)
@@ -204,7 +247,7 @@ def ergodic_list(list_name: List[str],msg: str) -> bool: #遍历名为list_name�
 favor_trigger=on_message(favor_dialog_rule,priority=97)
 
 @favor_trigger.handle()
-async def _(event: GroupMessageEvent,bot: Bot):
+async def _(event: GroupMessageEvent):
     uid=str(event.user_id)
     gid=str(event.group_id)
     message=re.sub(u"\\[.*?]", "", event.raw_message) #提取原始消息并去除CQ消息段
@@ -221,6 +264,8 @@ async def _(event: GroupMessageEvent,bot: Bot):
             await favor_trigger.send(Message("凛绪好难过......"))
             addData(uid,gid,rnd)
             addTargetData(uid,gid,"DialogAdd",1)
+        else:
+            await favor_trigger.finish(Message("谢谢......"))
     else:
         await favor_trigger.finish(Message("请先注册好感度!"))
 # (未实现)每日零点清零好感度增加计数限制
